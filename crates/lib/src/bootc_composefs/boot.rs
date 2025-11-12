@@ -158,7 +158,7 @@ pub(crate) fn container_root_has_uki(root: &Dir) -> Result<bool> {
 pub fn get_esp_partition(device: &str) -> Result<(String, Option<String>)> {
     let device_info = bootc_blockdev::partitions_of(Utf8Path::new(device))?;
     let esp = crate::bootloader::esp_in(&device_info)?;
-
+    tracing::debug!("Found ESP partition: {}", esp.node);
     Ok((esp.node.clone(), esp.uuid.clone()))
 }
 
@@ -272,6 +272,11 @@ fn write_bls_boot_entries_to_disk(
     entry: &UsrLibModulesVmlinuz<Sha512HashValue>,
     repo: &crate::store::ComposefsRepository,
 ) -> Result<()> {
+    tracing::debug!(
+        "Writing BLS boot entries to disk for deployment {} at boot_dir {}",
+        deployment_id.to_hex(),
+        boot_dir.display()
+    );
     let id_hex = deployment_id.to_hex();
 
     // Write the initrd and vmlinuz at /boot/<id>/

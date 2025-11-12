@@ -20,6 +20,8 @@ use rustix::path::Arg;
 use fn_error_context::context;
 
 pub(crate) async fn get_etc_diff() -> Result<()> {
+    tracing::debug!("get_etc_diff");
+
     let host = composefs_deployment_status().await?;
     let booted_composefs = host.require_composefs_booted()?;
 
@@ -42,6 +44,8 @@ pub(crate) async fn get_etc_diff() -> Result<()> {
 }
 
 pub(crate) async fn composefs_backend_finalize() -> Result<()> {
+    tracing::debug!("composefs_backend_finalize");
+
     let host = composefs_deployment_status().await?;
 
     let booted_composefs = host.require_composefs_booted()?;
@@ -95,18 +99,24 @@ pub(crate) async fn composefs_backend_finalize() -> Result<()> {
     match booted_composefs.bootloader {
         Bootloader::Grub => match staged_composefs.boot_type {
             BootType::Bls => {
+                tracing::debug!("bootloader > grub > bls finalize");
                 let entries_dir = boot_dir.open_dir("loader")?;
                 rename_exchange_bls_entries(&entries_dir)?;
             }
-            BootType::Uki => finalize_staged_grub_uki(&esp_mount.fd, &boot_dir)?,
+            BootType::Uki => {
+                tracing::debug!("bootloader > grub > uki finalize");
+                finalize_staged_grub_uki(&esp_mount.fd, &boot_dir)?;
+            }
         },
 
         Bootloader::Systemd => match staged_composefs.boot_type {
             BootType::Bls => {
+                tracing::debug!("bootloader > systemd > bls finalize");
                 let entries_dir = esp_mount.fd.open_dir("loader")?;
                 rename_exchange_bls_entries(&entries_dir)?;
             }
             BootType::Uki => {
+                tracing::debug!("bootloader > systemd > uki finalize");
                 rename_staged_uki_entries(&esp_mount.fd)?;
 
                 let entries_dir = esp_mount.fd.open_dir("loader")?;
