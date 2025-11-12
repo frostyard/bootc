@@ -31,6 +31,7 @@ Conflicts=final.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+Environment=RUST_LOG=debug
 ExecStop=/usr/bin/bootc composefs-finalize-staged
 # This is a quite long timeout intentionally; the failure mode
 # here is that people don't get an upgrade.  We need to handle

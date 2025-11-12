@@ -4,6 +4,7 @@ Documentation=man:bootc(8)
 
 [Service]
 Type=oneshot
+Environment=RUST_LOG=debug
 ExecStart=/usr/lib/bootc/fedora-bootc-destructive-cleanup
 PrivateMounts=true
 
