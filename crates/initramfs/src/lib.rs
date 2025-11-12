@@ -121,7 +121,7 @@ pub fn open_dir(dirfd: impl AsFd, name: impl AsRef<Path> + Debug) -> Result<Owne
         OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
     );
-    tracing::debug!("Opened dir {:?} with fd {:?}", name, dirfd.as_fd());
+    tracing::debug!("Opened dir {:?} with fd {:?}", name, dirfd.as_fd().clone());
     Ok(res?)
 }
 
