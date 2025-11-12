@@ -121,7 +121,7 @@ pub fn open_dir(dirfd: impl AsFd, name: impl AsRef<Path> + Debug) -> Result<Owne
         OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
     );
-
+    tracing::debug!("Opened dir {:?} with fd {:?}", name, dirfd.as_fd());
     Ok(res?)
 }
 
@@ -131,7 +131,7 @@ fn ensure_dir(dirfd: impl AsFd, name: &str) -> Result<OwnedFd> {
         Ok(()) | Err(Errno::EXIST) => {}
         Err(err) => Err(err).with_context(|| format!("Creating dir {name}"))?,
     }
-
+    tracing::debug!("Ensured dir {}", name);
     open_dir(dirfd, name)
 }
 
@@ -144,7 +144,7 @@ fn bind_mount(fd: impl AsFd, path: &str) -> Result<OwnedFd> {
             | OpenTreeFlags::OPEN_TREE_CLOEXEC
             | OpenTreeFlags::AT_EMPTY_PATH,
     );
-
+    tracing::debug!("Bind mounted path {} with fd {:?}", path, fd.as_fd());
     Ok(res?)
 }
 
