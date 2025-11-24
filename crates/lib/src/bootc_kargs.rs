@@ -45,6 +45,52 @@ impl Config {
     }
 }
 
+/// Compute the diff between existing and remote kargs
+/// Apply the diff to the new kargs
+fn compute_apply_kargs_diff(
+    existing_kargs: &Cmdline,
+    remote_kargs: &Cmdline,
+    new_kargs: &mut Cmdline,
+) {
+    // Calculate the diff between the existing and remote kargs
+    let added_kargs: Vec<_> = remote_kargs
+        .iter()
+        .filter(|item| !existing_kargs.iter().any(|existing| *item == existing))
+        .collect();
+    let removed_kargs: Vec<_> = existing_kargs
+        .iter()
+        .filter(|item| !remote_kargs.iter().any(|remote| *item == remote))
+        .collect();
+
+    tracing::debug!("kargs: added={:?} removed={:?}", added_kargs, removed_kargs);
+
+    // Apply the diff to the system kargs
+    for arg in &removed_kargs {
+        new_kargs.remove_exact(arg);
+    }
+    for arg in &added_kargs {
+        new_kargs.add(arg);
+    }
+}
+
+/// Looks for files in usr/lib/bootc/kargs.d and parses cmdline agruments
+pub(crate) fn kargs_from_composefs_filesystem(
+    new_fs: &Dir,
+    current_root: Option<&Dir>,
+    new_kargs: &mut Cmdline,
+) -> Result<()> {
+    let remote_kargs = get_kargs_in_root(new_fs, std::env::consts::ARCH)?;
+
+    let existing_kargs = match current_root {
+        Some(root) => get_kargs_in_root(root, std::env::consts::ARCH)?,
+        None => Cmdline::new(),
+    };
+
+    compute_apply_kargs_diff(&existing_kargs, &remote_kargs, new_kargs);
+
+    Ok(())
+}
+
 /// Load and parse all bootc kargs.d files in the specified root, returning
 /// a combined list.
 pub(crate) fn get_kargs_in_root(d: &Dir, sys_arch: &str) -> Result<CmdlineOwned> {
@@ -175,29 +221,7 @@ pub(crate) fn get_kargs(
     // Fetch the kernel arguments from the new root
     let remote_kargs = get_kargs_from_ostree(repo, &fetched_tree, sys_arch)?;
 
-    // Calculate the diff between the existing and remote kargs
-    let added_kargs: Vec<_> = remote_kargs
-        .iter()
-        .filter(|item| !existing_kargs.iter().any(|existing| *item == existing))
-        .collect();
-    let removed_kargs: Vec<_> = existing_kargs
-        .iter()
-        .filter(|item| !remote_kargs.iter().any(|remote| *item == remote))
-        .collect();
-
-    tracing::debug!(
-        "kargs: added={:?} removed={:?}",
-        &added_kargs,
-        removed_kargs
-    );
-
-    // Apply the diff to the system kargs
-    for arg in &removed_kargs {
-        kargs.remove_exact(arg);
-    }
-    for arg in &added_kargs {
-        kargs.add(arg);
-    }
+    compute_apply_kargs_diff(&existing_kargs, &remote_kargs, &mut kargs);
 
     Ok(kargs)
 }

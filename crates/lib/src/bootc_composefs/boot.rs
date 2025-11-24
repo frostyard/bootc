@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use bootc_blockdev::find_parent_devices;
-use bootc_kernel_cmdline::utf8::Cmdline;
+use bootc_kernel_cmdline::utf8::{Cmdline, Parameter};
 use bootc_mount::inspect_filesystem_of_dir;
 use bootc_mount::tempmount::TempMount;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -33,6 +33,7 @@ use rustix::{mount::MountFlags, path::Arg};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::bootc_kargs::kargs_from_composefs_filesystem;
 use crate::composefs_consts::{TYPE1_ENT_PATH, TYPE1_ENT_PATH_STAGED};
 use crate::parsers::bls_config::{BLSConfig, BLSConfigType};
 use crate::parsers::grub_menuconfig::MenuEntry;
@@ -51,7 +52,6 @@ use crate::{
         BOOT_LOADER_ENTRIES, COMPOSEFS_CMDLINE, ORIGIN_KEY_BOOT, ORIGIN_KEY_BOOT_DIGEST,
         STAGED_BOOT_LOADER_ENTRIES, STATE_DIR_ABS, USER_CFG, USER_CFG_STAGED,
     },
-    install::RW_KARG,
     spec::{Bootloader, Host},
 };
 
@@ -381,10 +381,11 @@ pub(crate) fn setup_composefs_bls_boot(
     repo: crate::store::ComposefsRepository,
     id: &Sha512HashValue,
     entry: &ComposefsBootEntry<Sha512HashValue>,
+    mounted_erofs: &Dir,
 ) -> Result<String> {
     let id_hex = id.to_hex();
 
-    let (root_path, esp_device, cmdline_refs, fs, bootloader) = match setup_type {
+    let (root_path, esp_device, mut cmdline_refs, fs, bootloader) = match setup_type {
         BootSetupType::Setup((root_setup, state, postfetch, fs)) => {
             // root_setup.kargs has [root=UUID=<UUID>, "rw"]
             let mut cmdline_options = Cmdline::new();
@@ -415,10 +416,30 @@ pub(crate) fn setup_composefs_bls_boot(
             let sysroot_parent = get_sysroot_parent_dev(&storage.physical_root)?;
             let bootloader = host.require_composefs_booted()?.bootloader.clone();
 
+            let boot_dir = storage.require_boot_dir()?;
+            let current_cfg = get_booted_bls(&boot_dir)?;
+
+            let mut cmdline = match current_cfg.cfg_type {
+                BLSConfigType::NonEFI { options, .. } => {
+                    let options = options
+                        .ok_or_else(|| anyhow::anyhow!("No 'options' found in BLS Config"))?;
+
+                    Cmdline::from(options)
+                }
+
+                _ => anyhow::bail!("Found NonEFI config"),
+            };
+
+            // Copy all cmdline args, replacing only `composefs=`
+            let param = format!("{COMPOSEFS_CMDLINE}={id_hex}");
+            let param =
+                Parameter::parse(&param).context("Failed to create 'composefs=' parameter")?;
+            cmdline.add_or_modify(&param);
+
             (
                 Utf8PathBuf::from("/sysroot"),
                 get_esp_partition(&sysroot_parent)?.0,
-                Cmdline::from(format!("{RW_KARG} {COMPOSEFS_CMDLINE}={id_hex}")),
+                cmdline,
                 fs,
                 bootloader,
             )
@@ -426,6 +447,14 @@ pub(crate) fn setup_composefs_bls_boot(
     };
 
     let is_upgrade = matches!(setup_type, BootSetupType::Upgrade(..));
+
+    let current_root = if is_upgrade {
+        Some(&Dir::open_ambient_dir("/", ambient_authority()).context("Opening root")?)
+    } else {
+        None
+    };
+
+    kargs_from_composefs_filesystem(mounted_erofs, current_root, &mut cmdline_refs)?;
 
     let (entry_paths, _tmpdir_guard) = match bootloader {
         Bootloader::Grub => {
@@ -505,8 +534,35 @@ pub(crate) fn setup_composefs_bls_boot(
                 });
 
             match find_vmlinuz_initrd_duplicates(&boot_digest)? {
-                Some(symlink_to) => {
-                    let symlink_to = &symlink_to[0];
+                Some(shared_entries) => {
+                    // Multiple deployments could be using the same kernel + initrd, but there
+                    // would be only one available
+                    //
+                    // Symlinking directories themselves would be better, but vfat does not support
+                    // symlinks
+
+                    let mut shared_entry: Option<String> = None;
+
+                    let entries =
+                        Dir::open_ambient_dir(entry_paths.entries_path, ambient_authority())
+                            .context("Opening entries path")?
+                            .entries_utf8()
+                            .context("Getting dir entries")?;
+
+                    for ent in entries {
+                        let ent = ent?;
+                        // We shouldn't error here as all our file names are UTF-8 compatible
+                        let ent_name = ent.file_name()?;
+
+                        if shared_entries.contains(&ent_name) {
+                            shared_entry = Some(ent_name);
+                            break;
+                        }
+                    }
+
+                    let shared_entry = shared_entry.ok_or_else(|| {
+                        anyhow::anyhow!("Could not get symlink to BLS boot entry")
+                    })?;
 
                     match bls_config.cfg_type {
                         BLSConfigType::NonEFI {
@@ -514,10 +570,15 @@ pub(crate) fn setup_composefs_bls_boot(
                             ref mut initrd,
                             ..
                         } => {
-                            *linux = entry_paths.abs_entries_path.join(&symlink_to).join(VMLINUZ);
+                            *linux = entry_paths
+                                .abs_entries_path
+                                .join(&shared_entry)
+                                .join(VMLINUZ);
 
-                            *initrd =
-                                vec![entry_paths.abs_entries_path.join(&symlink_to).join(INITRD)];
+                            *initrd = vec![entry_paths
+                                .abs_entries_path
+                                .join(&shared_entry)
+                                .join(INITRD)];
                         }
 
                         _ => unreachable!(),
@@ -1022,6 +1083,7 @@ pub(crate) fn setup_composefs_boot(
                 repo,
                 &id,
                 entry,
+                &mounted_fs,
             )?;
 
             boot_digest = Some(digest);
